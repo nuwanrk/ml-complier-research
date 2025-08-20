@@ -1,44 +1,19 @@
-// a one-pass compiler for evaluating expressions - 4 + 2 * 10 + 3 * (5 + 1)
+// implement a simple rule engine with AST
+// evaluate the rule: price > 100 AND stock < 50
 const std = @import("std");
 
 pub fn main() !void {
-    const program = "4 + 2 * 10 + 3 * (5 + 1)";
-
-    std.debug.print("one-pass compiler for the program: {s}\n", .{program});
-
-    var tokernize = Tokernizer.init(program);
-    while (tokernize.next()) |token| {
-        std.debug.print("{?}: {s}\n", .{ token.tag, program[token.loc.start..token.loc.end] });
+    const rule = "price > 100 AND stock < 50";
+    std.debug.print("rule: {s}\n", .{rule});
+    var tokernizer = Tokernizer.init(rule);
+    while (tokernizer.next()) |token| {
+        std.debug.print("{?}: {s}\n", .{ token.tag, rule[token.loc.start..token.loc.end] });
 
         switch (token.tag) {
             .invalid => return error.TokernizerError,
             .eoi => break,
             else => {},
         }
-    }
-}
-
-// BNF grammer
-// input  : <expr>
-// expr   : number | expr "+" expr | expr "*" expr | "(" expr ")"
-// number : 0..9
-const Expr = union(enum) {
-    number: u64,
-    binary: struct { *Expr, *Expr },
-};
-
-fn parse_expr(allocator: std.mem.Allocator, tokens: *Tokernizer) !*Expr {
-    const current = tokens.next() orelse return error.ExpectExpr;
-
-    switch (current.tag) {
-        .number => {
-            const lit = tokens.buffer[current.loc.start..current.loc.end];
-            const value = try std.fmt.parseInt(u64, lit, 10);
-
-            const result = try allocator.create(Expr);
-            result.* = .{ .constnat = value };
-        },
-        else => return error.ExpectExpr,
     }
 }
 
@@ -53,34 +28,34 @@ const Token = struct {
 
     const Tag = enum {
         invalid,
-        eoi, // end of input
+        eoi,
+        variable,
 
-        l_paren,
-        r_paren,
-
+        less_than,
+        greater_than,
         number,
 
-        plus,
-        mul,
+        keyword_and,
     };
+
+    const keywords = std.StaticStringMap(Tag).initComptime(.{.{ "AND", .keyword_and }});
 
     fn str(tag: Tag) ?[]const u8 {
         return switch (tag) {
-            .invlaid, .eoi, .number => null,
-            .l_paren => ")",
-            .r_paren => "(",
-            .plus => "+",
-            .mul => "*",
-        };
-    }
-
-    fn symbol(tag: Tag) []const u8 {
-        return tag.str(tag) orelse switch (tag) {
             .invalid => "invalid token",
             .eoi => "end of input",
             .number => "number",
+            .less_than => "<",
+            .greater_than => ">",
+            .number => "number",
+            .keyword_and => "AND",
+            .variable => "variable",
             else => unreachable,
         };
+    }
+
+    fn getKeyword(keyword: []const u8) ?Tag {
+        return keywords.get(keyword);
     }
 };
 
@@ -89,20 +64,14 @@ const Tokernizer = struct {
     index: usize,
 
     fn init(buffer: [:0]const u8) Tokernizer {
-        return .{
-            .buffer = buffer,
-            .index = 0,
-        };
-    }
-
-    fn print(self: *Tokernizer, token: *const Token) void {
-        std.debug.print("{s} \"{s}\"\n", .{ @tagName(token.Tag), self.buffer[token.loc.start..token.loc.end] });
+        return .{ .buffer = buffer, .index = 0 };
     }
 
     const State = enum {
         start,
         number,
         invalid,
+        variable,
     };
 
     fn next(self: *Tokernizer) ?Token {
@@ -142,26 +111,35 @@ const Tokernizer = struct {
                     continue :state .number;
                 },
 
-                '(' => {
-                    result.tag = .l_paren;
+                'a'...'z', 'A'...'Z' => {
+                    result.tag = .variable;
+                    continue :state .variable;
+                },
+
+                '<' => {
+                    result.tag = .less_than;
                     self.index += 1;
                 },
 
-                ')' => {
-                    result.tag = .r_paren;
+                '>' => {
+                    result.tag = .greater_than;
                     self.index += 1;
                 },
 
-                '+' => {
-                    result.tag = .plus;
-                    self.index += 1;
-                },
-
-                '*' => {
-                    result.tag = .mul;
-                    self.index += 1;
-                },
                 else => result.tag = .invalid,
+            },
+
+            .variable => {
+                self.index += 1;
+                switch (self.buffer[self.index]) {
+                    'a'...'z', 'A'...'Z' => continue :state .variable,
+                    else => {
+                        const ident = self.buffer[result.loc.start..self.index];
+                        if (Token.getKeyword(ident)) |tag| {
+                            result.tag = tag;
+                        }
+                    },
+                }
             },
 
             .number => switch (self.buffer[self.index]) {
@@ -173,7 +151,7 @@ const Tokernizer = struct {
             },
 
             .invalid => {
-                std.debug.print(" tokernizer error => invalid state", .{});
+                std.debug.print("tokernizer error => invalid state", .{});
             },
         }
         result.loc.end = self.index;
